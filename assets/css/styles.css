@@ -99,6 +99,8 @@ h1, h2, h3, h4 { margin: 0; line-height: 1.25; }
 .save-status { font-size: 12px; color: var(--muted); }
 .save-status[data-kind="busy"] { color: var(--accent); }
 .save-status[data-kind="err"] { color: var(--error); }
+.save-status[data-kind="warn"] { color: #a86a00; }
+.save-status[hidden] { display: none; }
 
 .tabs {
   display: flex; gap: 2px; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border);
@@ -184,6 +186,8 @@ textarea.input { resize: vertical; }
 .menu-item { text-align: left; background: none; border: 0; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
 .menu-item:hover { background: var(--surface-2); }
 .menu-item.danger { color: var(--error); }
+.menu-item.muted { color: var(--muted); cursor: default; font-size: 12px; }
+.menu-item.muted:hover { background: none; }
 
 /* ---------- alerts ---------- */
 .alert { border-radius: 8px; padding: 10px 14px; margin: 12px 0; }

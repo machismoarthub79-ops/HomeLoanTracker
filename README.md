@@ -41,12 +41,34 @@ The tests reproduce the original workbook: May-2026 interest **8,535.08**, basel
 - All data is serialized to JSON, encrypted with **AES-256-GCM** (key from PBKDF2-SHA256,
   310k iterations, random salt) and stored as an encrypted blob in the browser's
   `localStorage`. Nothing leaves the browser.
-- Data is **per browser/device**. Use *Menu → Export backup (encrypted)* to download a
-  backup file and *Import backup* to restore it elsewhere.
+- Data is **per browser/device** unless you turn on cloud sync (below). You can also use
+  *Menu → Export backup (encrypted)* and *Import backup*.
 - Forgotten PIN = data cannot be decrypted; only reset is possible. Keep backups.
 - Wrong-PIN attempts are throttled; the app auto-locks after 15 minutes idle.
 - Note: GitHub Pages is public hosting. The PIN protects **your data**, not the app code.
   Never commit personal data (backup files, account numbers) to the repository.
+
+## Cloud sync (optional, Firebase free tier)
+
+*Menu → Sign in with Google (cloud sync)* uploads the **already-encrypted** vault blob to
+Firestore (`vaults/<your uid>`). Google never sees loan data; only ciphertext is stored.
+
+- New device: on the PIN setup screen choose *Already use this on another device? → Restore
+  from cloud*, sign in, enter the PIN used on the other device.
+- Sync runs after unlock, after every change (≈1.5 s), on *Sync now* and when the browser
+  comes back online. If both devices changed since their last sync you are asked which
+  version to keep.
+- Changing the PIN on one device: other devices ask for the new PIN once on their next sync.
+- The cloud copy is only as strong as your PIN (6 digits can be brute-forced offline if the
+  blob leaks). Firestore rules (`firebase/firestore.rules`) restrict each document to its owner.
+- If the Firebase SDK is blocked on your network the app keeps working locally.
+
+### One-time Firebase setup
+1. Firebase console → Project settings → add a Web app → paste the config into
+   `assets/js/firebase-config.js`.
+2. Authentication → Sign-in method → enable **Google**; Settings → Authorized domains → add
+   `<user>.github.io`.
+3. Firestore Database → create (production mode) → Rules → paste `firebase/firestore.rules` → Publish.
 
 ## Project structure
 
@@ -60,6 +82,9 @@ assets/
     calc.js                Daily-reducing snowball engine (pure functions)
     store.js               Data model, defaults, normalization
     vault.js               PIN-based encryption + localStorage blob
+    cloud.js               Optional Firebase auth + Firestore sync (lazy-loaded SDK)
+    syncLogic.js           Pure push/pull/conflict decision (unit-tested)
+    firebase-config.js     Firebase web config (public identifiers)
     ui.js                  Toasts, dialogs, form helpers
     utils.js               Date / money / DOM helpers
     views/
@@ -68,7 +93,8 @@ assets/
       schedule.js          Tab 3 – Schedule Snowball
       summary.js           Tab 4 – Summary (+ chart)
       howTo.js             Tab 5 – How to Use
-tests/calc.test.js         Engine tests (node --test)
+firebase/firestore.rules   Security rules to publish in Firebase
+tests/                     Engine + sync-logic tests (node --test)
 .nojekyll                  Serve files as-is on GitHub Pages
 ```
 

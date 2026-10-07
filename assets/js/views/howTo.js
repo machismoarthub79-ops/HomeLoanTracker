@@ -21,6 +21,7 @@ export function renderHowTo() {
       h('li', {}, 'Access is protected by a 6-digit PIN that you create the first time you open the site.'),
       h('li', {}, 'All data is encrypted in your browser (AES-256-GCM, key derived from your PIN with PBKDF2) and stored as an encrypted blob in this browser’s local storage. Nothing is sent to any server.'),
       h('li', {}, 'Data is per browser/device. Use ', h('em', {}, 'Menu → Export backup'), ' to download an encrypted backup file, and ', h('em', {}, 'Import backup'), ' to restore it on another device.'),
+      h('li', {}, 'Optional cloud sync: ', h('em', {}, 'Menu → Sign in with Google'), ' stores only the encrypted blob in your private Firebase space so other devices can restore it (setup screen → Restore from cloud). If both devices changed, you choose which version to keep.'),
       h('li', {}, 'If you forget the PIN, the data cannot be recovered – only reset. Keep a backup.'),
       h('li', {}, 'The app locks automatically after 15 minutes of inactivity, or via ', h('em', {}, 'Menu → Lock'), '.')),
 

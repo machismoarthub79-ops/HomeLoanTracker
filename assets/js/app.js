@@ -4,9 +4,11 @@ import { debounce, downloadBlob, h, todayISO } from './utils.js';
 import { analyzeLoan } from './calc.js';
 import { duplicateLoan, initialState, newLoan, normalizeState } from './store.js';
 import {
-  PIN_REGEX, changePin, createVault, cryptoAvailable, decryptBackup, hasVault,
-  isEncryptedBackup, lockoutRemaining, unlockVault, wipeVault,
+  PIN_REGEX, adoptBlob, changePin, createVault, cryptoAvailable, decryptBackup, hasVault,
+  isEncryptedBackup, lockoutRemaining, readBlob, unlockVault, wipeVault,
 } from './vault.js';
+import * as cloud from './cloud.js';
+import { decideSync } from './syncLogic.js';
 import { confirmDialog, modal, pinInput, promptDialog, toast } from './ui.js';
 import { renderLoanDetails } from './views/loanDetails.js';
 import { renderInputs } from './views/inputs.js';
@@ -81,6 +83,10 @@ function showSetup() {
     h('p', { class: 'muted' }, 'Your data is encrypted with this PIN and stored only in this browser. If you forget it, the data cannot be recovered.'),
     form,
     h('details', { class: 'gate-more' },
+      h('summary', {}, 'Already use this on another device?'),
+      h('p', { class: 'muted' }, 'Sign in with Google to download your encrypted cloud copy, then enter the PIN you used there.'),
+      h('button', { class: 'btn btn-block', type: 'button', onclick: restoreFromCloud }, 'Restore from cloud (Google)')),
+    h('details', { class: 'gate-more' },
       h('summary', {}, 'Have a backup file?'),
       h('p', { class: 'muted' }, 'Create a PIN first, then use Menu → Import backup.'))));
   pin1.focus();
@@ -140,6 +146,7 @@ function startApp(data) {
   if (!location.hash) history.replaceState(null, '', '#schedule');
   armIdleLock();
   render();
+  if (cloud.isEnabled()) syncNow();
 }
 
 function lock(message = '') {
@@ -173,9 +180,10 @@ let pendingSave = false;
 const doSave = async () => {
   if (!session || !state) return;
   try {
-    await session.save(state);
+    const blob = await session.save(state);
     pendingSave = false;
     setSaveStatus('Saved', 'ok');
+    scheduleCloudPush(blob);
   } catch (e) {
     setSaveStatus('Save failed', 'err');
     toast(`Could not save: ${e.message}`, 'error', 5000);
@@ -223,6 +231,7 @@ function render() {
   }, state.loans.map((l) => h('option', { value: l.id, selected: l.id === state.activeLoanId }, l.name)));
 
   saveStatusEl = h('span', { class: 'save-status', 'data-kind': 'ok' }, 'Saved');
+  cloudStatusEl = h('span', { class: 'save-status cloud-status', 'data-kind': cloudStatus.kind, hidden: cloudStatus.text ? null : true }, cloudStatus.text);
 
   const header = h('header', { class: 'topbar' },
     h('div', { class: 'brand' }, h('span', { class: 'brand-mark' }, '₹'), h('span', { class: 'brand-text' }, 'Loan Closure Tracker')),
@@ -236,7 +245,9 @@ function render() {
       ]) : null),
     h('div', { class: 'top-right' },
       saveStatusEl,
+      cloudStatusEl,
       menuButton('☰ Menu', 'App menu', [
+        ...cloudMenuItems(),
         ['Export backup (encrypted)', exportEncrypted],
         ['Export data (plain JSON)', exportPlain],
         ['Import backup…', importBackup],
@@ -431,15 +442,243 @@ async function changePinFlow() {
       return true;
     },
   });
-  if (res === 'ok') toast('PIN changed. Old encrypted backups still open with the old PIN.', 'success', 4500);
+  if (res === 'ok') {
+    toast('PIN changed. Old encrypted backups still open with the old PIN.', 'success', 4500);
+    scheduleCloudPush(readBlob());
+  }
 }
 
 async function eraseAll() {
-  const ok = await confirmDialog('Erase all data?', 'This permanently deletes every loan and the PIN from this browser.', { okLabel: 'Erase everything', danger: true });
+  const ok = await confirmDialog('Erase all data?', 'This permanently deletes every loan and the PIN from this browser. A cloud copy, if any, is not deleted.', { okLabel: 'Erase everything', danger: true });
   if (!ok) return;
   wipeVault();
+  cloud.clearLocalMarkers();
   session = null; state = null;
   showSetup();
+}
+
+// ----- cloud sync (optional) -----
+let cloudStatusEl = null;
+let cloudStatus = { text: '', kind: '' };
+let cloudBusy = false;
+let cloudTimer = null;
+let cloudPending = null;
+
+function setCloudStatus(text, kind = '') {
+  cloudStatus = { text, kind };
+  if (cloudStatusEl) {
+    cloudStatusEl.textContent = text;
+    cloudStatusEl.dataset.kind = kind;
+    cloudStatusEl.hidden = !text;
+  }
+}
+
+function cloudErrorMessage(e) {
+  const code = e?.code || '';
+  if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') return 'Sign-in cancelled.';
+  if (code === 'auth/popup-blocked') return 'The sign-in popup was blocked. Allow popups for this site and retry.';
+  if (code === 'auth/unauthorized-domain') return 'This website is not in Firebase → Authentication → Authorized domains.';
+  if (code === 'remote-changed') return 'The cloud copy kept changing. Try Sync now again.';
+  if (code === 'permission-denied' || code === 'firestore/permission-denied') return 'Firestore rules denied access. Check the rules and that you are signed in.';
+  if (code === 'auth/operation-not-allowed') return 'Google sign-in is not enabled in Firebase → Authentication.';
+  if (/dynamically imported|Failed to fetch|NetworkError|network/i.test(e?.message || '') || code === 'unavailable') {
+    return 'Cannot reach Google/Firebase. Your network may be blocking it. Local data is safe.';
+  }
+  return `Cloud error: ${code || e?.message || e}`;
+}
+
+function cloudMenuItems() {
+  const u = cloud.currentUser();
+  if (cloud.isEnabled() && u) {
+    return [
+      [`Cloud: ${u.email || 'signed in'}`, () => {}, 'muted'],
+      ['Sync now', () => syncNow({ toastDone: true })],
+      ['Sign out of cloud', cloudSignOut],
+      ['Delete cloud copy…', cloudDelete, 'danger'],
+    ];
+  }
+  return [['Sign in with Google (cloud sync)', cloudSignIn]];
+}
+
+cloud.onUserChange(() => { if (state) render(); });
+window.addEventListener('online', () => { if (state && cloud.isEnabled()) syncNow(); });
+
+async function cloudSignIn() {
+  try {
+    setCloudStatus('Signing in…', 'busy');
+    await cloud.signIn();
+    cloud.setEnabled(true);
+    toast(`Signed in as ${cloud.currentUser()?.email || 'Google user'}.`, 'success');
+    render();
+    await syncNow({ toastDone: true });
+  } catch (e) {
+    setCloudStatus('');
+    toast(cloudErrorMessage(e), 'error', 6000);
+  }
+}
+
+async function cloudSignOut() {
+  try { await cloud.signOut(); } catch { /* ignore */ }
+  cloud.setEnabled(false);
+  cloud.setLastTs(0);
+  clearTimeout(cloudTimer);
+  cloudPending = null;
+  setCloudStatus('');
+  render();
+  toast('Signed out of cloud. Data stays on this device.');
+}
+
+async function cloudDelete() {
+  const ok = await confirmDialog('Delete cloud copy?', 'This removes your encrypted copy from Firebase. Data on your devices is not touched.', { okLabel: 'Delete cloud copy', danger: true });
+  if (!ok) return;
+  try {
+    await cloud.remove();
+    cloud.setLastTs(0);
+    setCloudStatus('Cloud: no copy', 'warn');
+    toast('Cloud copy deleted.');
+  } catch (e) { toast(cloudErrorMessage(e), 'error', 6000); }
+}
+
+/** Ask for the PIN of an encrypted blob; resolves to {session, data} or null. */
+async function askPinFor(blob, title = 'Cloud data needs its PIN') {
+  const pin = pinInput();
+  const err = h('p', { class: 'form-error' });
+  let res = null;
+  const choice = await modal({
+    title,
+    body: h('div', { class: 'stack' },
+      h('p', { class: 'muted' }, 'Enter the 6-digit PIN that was used when this cloud copy was saved.'),
+      h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'PIN'), pin), err),
+    buttons: [{ label: 'Cancel', value: null }, { label: 'Decrypt', value: 'ok', kind: 'primary' }],
+    onSubmit: async () => {
+      try { res = await adoptBlob(blob, pin.value); return true; } catch { err.textContent = 'Wrong PIN for this cloud copy.'; return false; }
+    },
+  });
+  return choice === 'ok' ? res : null;
+}
+
+async function restoreFromCloud() {
+  try {
+    await cloud.signIn();
+    const remote = await cloud.pull();
+    if (!remote) { toast('No cloud copy found for this Google account.', 'error', 5000); return; }
+    const res = await askPinFor(remote.blob, 'Restore from cloud');
+    if (!res) return;
+    session = res.session;
+    cloud.setEnabled(true);
+    cloud.setLastTs(remote.ts);
+    startApp(res.data);
+    toast('Restored from cloud.', 'success');
+  } catch (e) { toast(cloudErrorMessage(e), 'error', 6000); }
+}
+
+/** Replace local data with the cloud copy. */
+async function applyRemote(remote) {
+  let data = null;
+  try { data = await session.decryptSameKey(remote.blob); } catch { data = null; }
+  if (data) {
+    session.adopt(remote.blob);
+  } else {
+    const res = await askPinFor(remote.blob);
+    if (!res) { setCloudStatus('Cloud: newer copy not applied', 'warn'); return false; }
+    session = res.session;
+    data = res.data;
+  }
+  cloud.setLastTs(remote.ts);
+  state = normalizeState(data);
+  analysisVersion = new Map();
+  render();
+  toast('Loaded newer data from the cloud.', 'success');
+  return true;
+}
+
+async function resolveConflict(local, remote) {
+  if (!session || !state) { setCloudStatus('Cloud: conflict – resolve after unlocking', 'warn'); return 'skipped'; }
+  const when = (ts) => new Date(ts).toLocaleString();
+  const choice = await modal({
+    title: 'Sync conflict',
+    body: h('div', {},
+      h('p', {}, 'This device and the cloud both have changes the other has not seen.'),
+      h('ul', {},
+        h('li', {}, `This device: saved ${when(local.ts)}`),
+        h('li', {}, `Cloud: saved ${when(remote.ts)}`)),
+      h('p', { class: 'muted' }, 'The version you do not choose is overwritten. Tip: export a backup first if unsure.')),
+    buttons: [{ label: 'Decide later', value: null }, { label: 'Keep this device', value: 'local' }, { label: 'Use cloud version', value: 'cloud', kind: 'primary' }],
+  });
+  if (choice === 'cloud') return (await applyRemote(remote)) ? 'pulled' : 'skipped';
+  if (choice === 'local') {
+    const blob = await session.save(state); // fresh timestamp so other devices notice it
+    await cloud.push(blob, remote.ts);
+    cloud.setLastTs(blob.ts);
+    return 'synced';
+  }
+  setCloudStatus('Cloud: conflict – not synced', 'warn');
+  return 'skipped';
+}
+
+async function reconcile(local, attempt = 0) {
+  try {
+    return await reconcileOnce(local);
+  } catch (e) {
+    // Another device wrote between our read and write – look again (max 3 times).
+    if (e?.code === 'remote-changed' && attempt < 3) return reconcile(local, attempt + 1);
+    throw e;
+  }
+}
+
+async function reconcileOnce(local) {
+  const remote = await cloud.pull();
+  const action = decideSync(local?.ts || 0, remote?.ts, cloud.getLastTs());
+  if (action === 'push') { await cloud.push(local, remote?.ts); cloud.setLastTs(local.ts); return 'synced'; }
+  if (action === 'pull') return (await applyRemote(remote)) ? 'pulled' : 'skipped';
+  if (action === 'conflict') return resolveConflict(local, remote);
+  cloud.setLastTs(remote.ts);
+  return 'synced';
+}
+
+async function syncNow({ toastDone = false } = {}) {
+  if (!cloud.isEnabled() || !session || cloudBusy) return;
+  cloudBusy = true;
+  setCloudStatus('Cloud: syncing…', 'busy');
+  try {
+    await cloud.init();
+    if (!cloud.currentUser()) { setCloudStatus('Cloud: signed out', 'warn'); return; }
+    if (pendingSave) await doSave();
+    clearTimeout(cloudTimer);
+    cloudPending = null;
+    const result = await reconcile(readBlob());
+    if (result === 'synced' || result === 'pulled') {
+      setCloudStatus('Cloud: synced', 'ok');
+      if (toastDone && result === 'synced') toast('Cloud is up to date.', 'success');
+    }
+  } catch (e) {
+    setCloudStatus('Cloud: not synced', 'err');
+    if (toastDone || !/Cannot reach/.test(cloudErrorMessage(e))) toast(cloudErrorMessage(e), 'error', 6000);
+  } finally { cloudBusy = false; }
+}
+
+function scheduleCloudPush(blob) {
+  if (!cloud.isEnabled() || !blob) return;
+  cloudPending = blob;
+  setCloudStatus('Cloud: pending…', 'busy');
+  clearTimeout(cloudTimer);
+  cloudTimer = setTimeout(pushPending, 1500);
+}
+
+async function pushPending() {
+  const blob = cloudPending;
+  if (!blob) return;
+  if (cloudBusy) { cloudTimer = setTimeout(pushPending, 1500); return; }
+  cloudPending = null;
+  cloudBusy = true;
+  try {
+    await cloud.init();
+    if (!cloud.currentUser()) { setCloudStatus('Cloud: signed out', 'warn'); return; }
+    const result = await reconcile(blob);
+    if (result === 'synced' || result === 'pulled') setCloudStatus('Cloud: synced', 'ok');
+  } catch (e) {
+    setCloudStatus('Cloud: not synced', 'err');
+  } finally { cloudBusy = false; }
 }
 
 // ----- auto lock -----
