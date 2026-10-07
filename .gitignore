@@ -1,0 +1,4 @@
+node_modules/
+*.enc.json
+loan-tracker-*.json
+.DS_Store
