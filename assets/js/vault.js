@@ -47,7 +47,7 @@ async function deriveKey(pin, salt) {
 async function encryptWith(key, salt, data) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(data)));
-  return { app: 'HomeLoanTracker', format: 'vault', v: 1, kdf: 'PBKDF2-SHA256', iter: ITERATIONS, salt: b64(salt), iv: b64(iv), ct: b64(ct) };
+  return { app: 'HomeLoanTracker', format: 'vault', v: 1, kdf: 'PBKDF2-SHA256', iter: ITERATIONS, ts: Date.now(), salt: b64(salt), iv: b64(iv), ct: b64(ct) };
 }
 
 async function decryptBlob(blob, pin) {
@@ -109,6 +109,20 @@ class Session {
   async exportEncrypted(data) {
     return encryptWith(this.key, this.salt, data);
   }
+  /** Decrypt a blob made with the same PIN+salt; null when the salt differs (needs the PIN). */
+  async decryptSameKey(blob) {
+    if (blob.salt !== b64(this.salt)) return null;
+    try {
+      const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(blob.iv) }, this.key, unb64(blob.ct));
+      return JSON.parse(dec.decode(pt));
+    } catch {
+      throw new Error('WRONG_PIN');
+    }
+  }
+  /** Store an already-encrypted blob (e.g. from the cloud) as the local vault, unchanged. */
+  adopt(blob) {
+    localStorage.setItem(VAULT_KEY, JSON.stringify(blob));
+  }
 }
 
 export async function createVault(pin, data) {
@@ -156,4 +170,17 @@ export function isEncryptedBackup(obj) {
 export function wipeVault() {
   localStorage.removeItem(VAULT_KEY);
   localStorage.removeItem(LOCKOUT_KEY);
+}
+
+/** Local vault blob (encrypted) or null. */
+export function readBlob() {
+  return readVault();
+}
+
+/** Decrypt a blob with the PIN, store it as the local vault unchanged and return a session. */
+export async function adoptBlob(blob, pin) {
+  const { key, salt, data } = await decryptBlob(blob, pin);
+  localStorage.setItem(VAULT_KEY, JSON.stringify(blob));
+  clearFails();
+  return { session: new Session(key, salt), data };
 }
