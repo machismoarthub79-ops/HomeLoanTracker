@@ -95,6 +95,13 @@ export function fmtMoney(n, currency = 'INR') {
   return numberFormatter(currency || 'INR', true).format(n);
 }
 
+/** 8 -> "8.00%", 8.255 -> "8.255%" (at least 2 decimals, up to 3). */
+export function fmtPct(n) {
+  if (!Number.isFinite(Number(n))) return '';
+  const v = Number(n);
+  return `${(Math.round(v * 1000) / 1000).toFixed(Math.round(v * 100) === v * 100 ? 2 : 3)}%`;
+}
+
 export function toNumber(v) {
   if (typeof v === 'number') return v;
   if (v === null || v === undefined) return NaN;

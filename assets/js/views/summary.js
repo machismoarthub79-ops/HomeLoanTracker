@@ -1,6 +1,6 @@
 // Tab 4 – Summary: snowball vs baseline (EMI only), chart, and all-loans overview.
 
-import { fmtDate, fmtMoney, fmtNum, h } from '../utils.js';
+import { fmtDate, fmtMoney, fmtNum, fmtPct, h } from '../utils.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -45,6 +45,7 @@ export function renderSummary(ctx) {
     h('td', {}, r.index),
     h('td', { class: 'nowrap' }, `${fmtDate(r.periodStart)} → ${fmtDate(r.periodEnd)}`),
     h('td', {}, fmtDate(r.emiDate)),
+    h('td', { class: 'num nowrap' }, r.apr === r.aprEnd ? fmtPct(r.apr) : `${fmtPct(r.apr)} → ${fmtPct(r.aprEnd)}`),
     h('td', { class: 'num' }, fmtNum(r.opening, cur)),
     h('td', { class: 'num' }, fmtNum(r.emi, cur)),
     h('td', { class: 'num' }, fmtNum(r.interest, cur)),
@@ -63,7 +64,7 @@ export function renderSummary(ctx) {
     h('details', { class: 'card' },
       h('summary', {}, `Baseline schedule – EMI only, no extra payments (${baseline.rows.length} rows)`),
       h('div', { class: 'table-wrap' }, h('table', { class: 'sheet' },
-        h('thead', {}, h('tr', {}, ['#', 'Period', 'EMI Date', 'Opening Balance', 'EMI', 'Interest', 'Principal Paid', 'Ending Balance', 'Cumulative Interest']
+        h('thead', {}, h('tr', {}, ['#', 'Period', 'EMI Date', 'Rate (APR)', 'Opening Balance', 'EMI', 'Interest', 'Principal Paid', 'Ending Balance', 'Cumulative Interest']
           .map((t, i) => h('th', { class: i >= 3 ? 'num' : '' }, t)))),
         h('tbody', {}, baselineRows)))),
     allLoansCard(ctx));

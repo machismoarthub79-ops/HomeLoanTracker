@@ -73,3 +73,51 @@ test('Insufficient EMI is flagged', () => {
   assert.equal(s.closed, false);
   assert.ok(s.warnings.length > 0);
 });
+
+// ---- dynamic interest rate ----
+test('Rate change splits interest inside a period (8% -> 9% on 15-Oct)', () => {
+  const inp = { startDate: '2026-10-01', balance: 1000000, apr: 8, emi: 0, emiDay: 10, dayBasis: 365 };
+  const s = buildSchedule(inp, [], { rateChanges: [{ id: 'r', date: '2026-10-15', apr: 9 }] });
+  const row = s.rows[0];
+  const expected = 1000000 * 0.08 / 365 * 14 + 1000000 * 0.09 / 365 * 17;
+  assert.equal(r2(row.interest), r2(expected));
+  assert.equal(row.segments.length, 2);
+  assert.deepEqual(row.segments.map((x) => x.apr), [8, 9]);
+  assert.equal(row.apr, 8);
+  assert.equal(row.aprEnd, 9);
+});
+
+test('Rate change on a payment date: segments split on payments and on the rate date', () => {
+  const s = buildSchedule(inputs, [{ id: 'a', date: '2026-10-20', amount: 10000 }], { rateChanges: [{ id: 'r', date: '2026-10-15', apr: 8.25 }] });
+  const oct = s.rows.find((r) => r.periodStart === '2026-10-01');
+  assert.deepEqual(oct.segments.map((x) => [x.from, x.to, x.apr]), [
+    ['2026-10-01', '2026-10-10', 8],
+    ['2026-10-10', '2026-10-15', 8],
+    ['2026-10-15', '2026-10-20', 8.25],
+    ['2026-10-20', '2026-11-01', 8.25],
+  ]);
+});
+
+test('Rate change before the start date acts as the opening rate; later changes stack', () => {
+  const s = buildSchedule(inputs, [], { rateChanges: [
+    { id: 'b', date: '2027-01-01', apr: 9 },
+    { id: 'a', date: '2026-01-01', apr: 7.5 },
+  ] });
+  assert.equal(s.rows[0].apr, 7.5);
+  const jan = s.rows.find((r) => r.periodStart === '2027-01-01');
+  assert.equal(jan.apr, 9);
+});
+
+test('A rate rise with the same EMI lengthens the loan and raises interest', () => {
+  const base = analyzeLoan({ inputs, extras: [], emiOverrides: {}, rateChanges: [] }).summary.baseline;
+  const up = analyzeLoan({ inputs, extras: [], emiOverrides: {}, rateChanges: [{ id: 'r', date: '2026-10-15', apr: 8.25 }] }).summary.baseline;
+  assert.ok(up.totalInterest > base.totalInterest);
+  assert.ok(up.months >= base.months);
+});
+
+test('No rate changes gives identical results (regression)', () => {
+  const a = analyzeLoan({ inputs, extras: [], emiOverrides: {} }).summary.baseline;
+  const b = analyzeLoan({ inputs, extras: [], emiOverrides: {}, rateChanges: [] }).summary.baseline;
+  assert.deepEqual(a, b);
+  assert.equal(r2(a.totalInterest), 464519.19);
+});

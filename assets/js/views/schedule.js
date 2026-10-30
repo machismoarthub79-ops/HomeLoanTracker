@@ -1,6 +1,6 @@
 // Tab 3 – Schedule Snowball: monthly rows with any number of extra payments.
 
-import { addDays, addMonths, daysInMonth, dayNum, downloadBlob, fmtDate, fmtMoney, fmtNum, h, isISODate, parseISO, round2, toISO, toNumber, uid } from '../utils.js';
+import { addDays, addMonths, daysInMonth, dayNum, downloadBlob, fmtDate, fmtMoney, fmtNum, fmtPct, h, isISODate, parseISO, round2, toISO, toNumber, uid } from '../utils.js';
 import { confirmDialog, modal, toast } from '../ui.js';
 
 // Expanded rows per loan (UI state only, keyed by period start).
@@ -86,8 +86,8 @@ export function renderSchedule(ctx) {
 
   // ---------- table ----------
   const head = h('thead', {}, h('tr', {},
-    ['', '#', 'Period', 'Opening Balance', 'EMI Date (Editable)', 'EMI', 'Extra Payments (Editable)', 'Interest', 'Total Payment', 'Principal Paid', 'Ending Balance', 'Cumulative Interest']
-      .map((t, i) => h('th', { class: i >= 3 && i !== 4 && i !== 6 ? 'num' : '' }, t))));
+    ['', '#', 'Period', 'Rate (APR)', 'Opening Balance', 'EMI Date (Editable)', 'EMI', 'Extra Payments (Editable)', 'Interest', 'Total Payment', 'Principal Paid', 'Ending Balance', 'Cumulative Interest']
+      .map((t, i) => h('th', { class: i >= 3 && i !== 5 && i !== 7 ? 'num' : '' }, t))));
 
   const tbody = h('tbody');
   for (const row of snowball.rows) {
@@ -119,6 +119,8 @@ export function renderSchedule(ctx) {
       h('td', {}, h('button', { class: 'expander', type: 'button', 'aria-expanded': String(isOpen), title: 'Show / edit details', onclick: toggle }, isOpen ? '▾' : '▸')),
       h('td', {}, row.index),
       h('td', { class: 'nowrap' }, `${fmtDate(row.periodStart)} → ${fmtDate(row.periodEnd)}`),
+      h('td', { class: `num nowrap ${row.apr !== row.aprEnd ? 'rate-changed' : ''}`, title: row.apr !== row.aprEnd ? 'Rate changed during this period' : '' },
+        row.apr === row.aprEnd ? fmtPct(row.apr) : `${fmtPct(row.apr)} → ${fmtPct(row.aprEnd)}`),
       h('td', { class: 'num' }, fmtNum(row.opening, cur)),
       h('td', {}, emiInput),
       h('td', { class: 'num' }, fmtNum(row.emi, cur)),
@@ -129,7 +131,7 @@ export function renderSchedule(ctx) {
       h('td', { class: 'num calc strong' }, row.closedOn ? h('span', { class: 'badge-good' }, `CLOSED ${fmtDate(row.closedOn)}`) : fmtNum(row.ending, cur)),
       h('td', { class: 'num calc' }, fmtNum(row.cumInterest, cur))));
 
-    if (isOpen) tbody.append(h('tr', { class: 'detail-row' }, h('td', { colspan: 12 }, rowDetail(row))));
+    if (isOpen) tbody.append(h('tr', { class: 'detail-row' }, h('td', { colspan: 13 }, rowDetail(row))));
   }
 
   function rowDetail(row) {
@@ -150,12 +152,13 @@ export function renderSchedule(ctx) {
     const segs = h('div', { class: 'detail-block' },
       h('h4', {}, 'Daily-reducing interest breakdown'),
       h('table', { class: 'mini' },
-        h('thead', {}, h('tr', {}, ['From', 'To', 'Days', 'Principal', 'Interest'].map((t, i) => h('th', { class: i >= 2 ? 'num' : '' }, t)))),
+        h('thead', {}, h('tr', {}, ['From', 'To', 'Days', 'Rate', 'Principal', 'Interest'].map((t, i) => h('th', { class: i >= 2 ? 'num' : '' }, t)))),
         h('tbody', {},
           row.segments.map((sg) => h('tr', {},
             h('td', {}, fmtDate(sg.from)), h('td', {}, fmtDate(sg.to)), h('td', { class: 'num' }, sg.days),
+            h('td', { class: 'num' }, fmtPct(sg.apr)),
             h('td', { class: 'num' }, fmtNum(sg.principal, cur)), h('td', { class: 'num' }, fmtNum(sg.interest, cur)))),
-          h('tr', { class: 'total' }, h('td', { colspan: 4 }, 'Interest for the period'), h('td', { class: 'num' }, fmtNum(row.interest, cur))))),
+          h('tr', { class: 'total' }, h('td', { colspan: 5 }, 'Interest for the period'), h('td', { class: 'num' }, fmtNum(row.interest, cur))))),
       h('h4', {}, 'Payments applied'),
       h('table', { class: 'mini' },
         h('thead', {}, h('tr', {}, ['Date', 'Type', 'Amount', 'Applied', 'Principal after'].map((t, i) => h('th', { class: i >= 2 ? 'num' : '' }, t)))),
@@ -206,7 +209,7 @@ export function renderSchedule(ctx) {
   return h('div', {},
     h('section', { class: 'card' },
       h('h2', { class: 'card-title' }, `Schedule Snowball – ${loan.name}`),
-      h('p', { class: 'muted' }, 'Yellow cells are editable. Click ▸ on a row to edit its extra payments and see the daily interest breakdown.'),
+      h('p', { class: 'muted' }, 'Yellow cells are editable. Click ▸ on a row to edit its extra payments and see the daily interest breakdown. Interest rate revisions are managed on the Inputs tab.'),
       stats, warnings, quickAdd),
     allExtras,
     h('section', { class: 'card table-card' },
@@ -267,10 +270,10 @@ async function recurringDialog(ctx, addMany) {
 
 function exportCSV(loan, schedule, cur) {
   const esc = (v) => `"${String(v).replace(/"/g, '""')}"`;
-  const lines = [['#', 'Period Start', 'Period End', 'Opening Balance', 'EMI Date', 'EMI', 'Extra Payments', 'Extra Total', 'Interest', 'Total Payment', 'Principal Paid', 'Ending Balance', 'Cumulative Interest', 'Closed On'].map(esc).join(',')];
+  const lines = [['#', 'Period Start', 'Period End', 'APR at Start', 'APR at End', 'Opening Balance', 'EMI Date', 'EMI', 'Extra Payments', 'Extra Total', 'Interest', 'Total Payment', 'Principal Paid', 'Ending Balance', 'Cumulative Interest', 'Closed On'].map(esc).join(',')];
   for (const r of schedule.rows) {
     lines.push([
-      r.index, r.periodStart, r.periodEnd, r.opening.toFixed(2), r.emiDate, r.emi.toFixed(2),
+      r.index, r.periodStart, r.periodEnd, r.apr, r.aprEnd, r.opening.toFixed(2), r.emiDate, r.emi.toFixed(2),
       r.extras.map((x) => `${x.date}:${x.amount}`).join(' | '), r.extraTotal.toFixed(2), r.interest.toFixed(2),
       r.totalPayment.toFixed(2), r.principalPaid.toFixed(2), r.ending.toFixed(2), r.cumInterest.toFixed(2), r.closedOn || '',
     ].map(esc).join(','));
