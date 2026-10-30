@@ -42,6 +42,7 @@ export function newLoan(name = 'New Loan') {
     details: emptyDetails(),
     inputs: defaultInputs(),
     extras: [],
+    rateChanges: [],
     emiOverrides: {},
     createdAt: now,
     updatedAt: now,
@@ -67,6 +68,7 @@ export function sampleLoan() {
     { id: uid(), date: '2026-05-17', amount: 13000, note: 'Extra 1' },
     { id: uid(), date: '2026-05-18', amount: 7000, note: 'Extra 2' },
   ];
+  loan.rateChanges = [{ id: uid(), date: '2026-10-15', apr: 8.25, note: 'Rate revised from 8.00%' }];
   return loan;
 }
 
@@ -91,6 +93,9 @@ function normalizeLoan(l) {
   const extras = Array.isArray(l?.extras) ? l.extras
     .filter((x) => x && isISODate(x.date))
     .map((x) => ({ id: x.id || uid(), date: x.date, amount: num(x.amount, 0), note: String(x.note || '') })) : [];
+  const rateChanges = Array.isArray(l?.rateChanges) ? l.rateChanges
+    .filter((x) => x && isISODate(x.date) && Number.isFinite(Number(x.apr)) && Number(x.apr) >= 0)
+    .map((x) => ({ id: x.id || uid(), date: x.date, apr: Number(x.apr), note: String(x.note || '') })) : [];
   const emiOverrides = {};
   for (const [k, v] of Object.entries(l?.emiOverrides || {})) if (isISODate(k) && isISODate(v)) emiOverrides[k] = v;
   return {
@@ -99,6 +104,7 @@ function normalizeLoan(l) {
     details: { ...emptyDetails(), ...(l?.details || {}) },
     inputs,
     extras,
+    rateChanges,
     emiOverrides,
     createdAt: l?.createdAt || base.createdAt,
     updatedAt: l?.updatedAt || base.updatedAt,
@@ -125,6 +131,7 @@ export function duplicateLoan(loan) {
   copy.id = uid();
   copy.name = `${loan.name} (copy)`;
   copy.extras = copy.extras.map((x) => ({ ...x, id: uid() }));
+  copy.rateChanges = copy.rateChanges.map((x) => ({ ...x, id: uid() }));
   copy.createdAt = copy.updatedAt = new Date().toISOString();
   return copy;
 }

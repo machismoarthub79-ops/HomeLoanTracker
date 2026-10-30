@@ -1,7 +1,8 @@
 // Tab 1 – Loan Details (reference information about the loan).
 
-import { fmtDate, fmtMoney, h, isISODate, toNumber } from '../utils.js';
+import { fmtDate, fmtMoney, fmtPct, h, isISODate, todayISO, toNumber } from '../utils.js';
 import { fieldRow } from '../ui.js';
+import { normalizeRateChanges, rateAt } from '../calc.js';
 
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD', 'JPY'];
 
@@ -55,7 +56,11 @@ export function renderLoanDetails(ctx) {
     ),
     h('h3', { class: 'section-title' }, 'From Inputs & Schedule (read-only)'),
     h('div', { class: 'form-grid' },
-      fieldRow({ label: 'Interest Rate (p.a.)', input: readOnly(`${Number(loan.inputs.apr).toFixed(2)}%`) }),
+      fieldRow({
+        label: 'Interest Rate (p.a.)',
+        input: readOnly(fmtPct(rateAt(loan.inputs.apr, normalizeRateChanges(loan.rateChanges || []), todayISO()))),
+        help: (loan.rateChanges || []).length ? `Current rate today. Opening rate ${fmtPct(loan.inputs.apr)}, ${loan.rateChanges.length} revision(s) on the Inputs tab.` : 'Opening rate from the Inputs tab.',
+      }),
       fieldRow({ label: 'EMI (minimum monthly payment)', input: readOnly(fmtMoney(loan.inputs.emi, cur)) }),
       fieldRow({ label: 'Starting Balance used', input: readOnly(fmtMoney(loan.inputs.balance, cur)), help: `From ${fmtDate(loan.inputs.startDate)}` }),
       fieldRow({ label: 'Projected Remaining Tenure (snowball)', input: readOnly(s.closed ? `${s.months} months` : 'Not closing – check Inputs') }),

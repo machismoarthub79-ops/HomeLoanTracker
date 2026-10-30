@@ -229,6 +229,9 @@ table { border-collapse: collapse; width: 100%; }
 .sheet tr.row-highlight td { background: var(--good-bg); }
 .sheet tr.total td, .mini tr.total td { font-weight: 700; border-top: 2px solid var(--border); }
 .sheet .input-sm[type="date"] { width: 140px; }
+.rate-changed { color: var(--series-2); font-weight: 700; }
+.rate-table { max-width: 640px; margin-top: 12px; }
+.rate-section { margin-top: 8px; }
 .overridden { outline: 2px dashed var(--accent); outline-offset: -2px; }
 .expander {
   background: none; border: 1px solid var(--border); border-radius: 6px; width: 26px; height: 26px; cursor: pointer;

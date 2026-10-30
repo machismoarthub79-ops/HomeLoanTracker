@@ -10,7 +10,9 @@ server, no database, no build step.
   details, inputs, extra payments and schedule.
 - **Loan Details** – account no, CIF, product, currency, dates, tenure, sanctioned amount,
   statement outstanding, notes.
-- **Inputs** – start period, starting balance, APR, EMI, default EMI day, day-count basis.
+- **Inputs** – start period, starting balance, APR, EMI, default EMI day, day-count basis,
+  plus **dynamic interest rate**: add any number of dated rate revisions (e.g. 8% → 8.25% on
+  15-Oct-2026). Interest is split day by day at the change; the EMI stays the same.
 - **Schedule Snowball** – monthly rows; add/remove **any number of extra payments** with
   their own dates and amounts (single, per row, or recurring). EMI date editable per row.
   Expand a row to see the daily-reducing interest breakdown. CSV export.

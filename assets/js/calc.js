@@ -40,20 +40,55 @@ export function validateInputs(inputs) {
   return errors;
 }
 
+/** Valid rate changes sorted by date: [{id, date, apr (percent), note}]. */
+export function normalizeRateChanges(list = []) {
+  return list
+    .filter((r) => r && isISODate(r.date) && Number.isFinite(Number(r.apr)) && Number(r.apr) >= 0)
+    .map((r) => ({ ...r, apr: Number(r.apr) }))
+    .sort((a, b) => dayNum(a.date) - dayNum(b.date));
+}
+
+/** APR (percent) in force on a date: the latest change on/before it, else the base APR. */
+export function rateAt(baseApr, changes, date) {
+  let apr = Number(baseApr);
+  const d = dayNum(date);
+  for (const c of changes) {
+    if (dayNum(c.date) <= d) apr = c.apr; else break;
+  }
+  return apr;
+}
+
 /**
  * Build a schedule.
  * @param {object} inputs  {startDate, balance, apr (percent), emi, emiDay, dayBasis}
  * @param {Array}  extras  [{id, date, amount, note}]
- * @param {object} options {emiOverrides: {periodStartISO: emiDateISO}, includeExtras: true}
+ * @param {object} options {emiOverrides: {periodStartISO: emiDateISO}, includeExtras: true, rateChanges: [{date, apr}]}
  */
 export function buildSchedule(inputs, extras = [], options = {}) {
-  const { emiOverrides = {}, includeExtras = true } = options;
+  const { emiOverrides = {}, includeExtras = true, rateChanges = [] } = options;
   const errors = validateInputs(inputs);
   if (errors.length) return { rows: [], errors, warnings: [], closed: false, unusedExtras: [] };
 
-  const rate = Number(inputs.apr) / 100;
   const basis = Number(inputs.dayBasis) || 365;
-  const daily = rate / basis;
+  const changes = normalizeRateChanges(rateChanges);
+
+  /** Interest on `principal` from `from` to `to`, split wherever the rate changes. */
+  const accrue = (principal, from, to) => {
+    const pieces = [];
+    const stops = changes
+      .map((c) => c.date)
+      .filter((d) => dayNum(d) > dayNum(from) && dayNum(d) < dayNum(to));
+    let cur = from;
+    for (const stop of [...new Set(stops), to]) {
+      const days = daysBetween(cur, stop);
+      if (days > 0) {
+        const apr = rateAt(inputs.apr, changes, cur);
+        pieces.push({ from: cur, to: stop, days, apr, principal, interest: principal * (apr / 100 / basis) * days });
+      }
+      cur = stop;
+    }
+    return pieces;
+  };
   const emi = Number(inputs.emi) || 0;
 
   const validExtras = includeExtras
@@ -104,11 +139,9 @@ export function buildSchedule(inputs, extras = [], options = {}) {
     const segments = [];
 
     for (const ev of events) {
-      const days = daysBetween(cursor, ev.date);
-      if (days > 0) {
-        const segInt = Math.max(principal, 0) * daily * days;
-        segments.push({ from: cursor, to: ev.date, days, principal: Math.max(principal, 0), interest: segInt });
-        interestRaw += segInt;
+      for (const piece of accrue(Math.max(principal, 0), cursor, ev.date)) {
+        segments.push(piece);
+        interestRaw += piece.interest;
       }
       cursor = ev.date;
 
@@ -131,11 +164,9 @@ export function buildSchedule(inputs, extras = [], options = {}) {
     }
 
     if (!closedOn) {
-      const days = daysBetween(cursor, periodEnd);
-      if (days > 0) {
-        const segInt = Math.max(principal, 0) * daily * days;
-        segments.push({ from: cursor, to: periodEnd, days, principal: Math.max(principal, 0), interest: segInt });
-        interestRaw += segInt;
+      for (const piece of accrue(Math.max(principal, 0), cursor, periodEnd)) {
+        segments.push(piece);
+        interestRaw += piece.interest;
       }
     }
 
@@ -161,6 +192,8 @@ export function buildSchedule(inputs, extras = [], options = {}) {
       periodEnd,
       emiDate,
       emiOverridden,
+      apr: rateAt(inputs.apr, changes, periodStart),
+      aprEnd: rateAt(inputs.apr, changes, addDays(periodEnd, -1)),
       opening: bal,
       emi: emiEv ? emiEv.applied : 0,
       extras: extraEvents,
@@ -213,8 +246,8 @@ export function summarize(schedule) {
 
 /** Snowball (with extras) vs baseline (EMI only) for one loan. */
 export function analyzeLoan(loan) {
-  const snowball = buildSchedule(loan.inputs, loan.extras, { emiOverrides: loan.emiOverrides });
-  const baseline = buildSchedule(loan.inputs, [], { emiOverrides: loan.emiOverrides, includeExtras: false });
+  const snowball = buildSchedule(loan.inputs, loan.extras, { emiOverrides: loan.emiOverrides, rateChanges: loan.rateChanges });
+  const baseline = buildSchedule(loan.inputs, [], { emiOverrides: loan.emiOverrides, includeExtras: false, rateChanges: loan.rateChanges });
   const s = summarize(snowball);
   const b = summarize(baseline);
   return {
